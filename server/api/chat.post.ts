@@ -32,7 +32,7 @@ export default defineEventHandler(async (event) => {
 			model: config.model,
 			max_tokens: 1024 * 5,
 			temperature: config.temperature,
-			system: config.systemPrompt || 'You are Claude, an AI assistant.',
+			...(config.systemPrompt ? { system: config.systemPrompt } : {}),
 			messages: messages.map(msg => ({
 				role: msg.role,
 				content: msg.content

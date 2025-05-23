@@ -1,5 +1,5 @@
 import { ref, computed } from 'vue'
-import { useChat } from './useChat'
+import { useChat, MODELS, type Model } from '~/composables/useChat'
 
 interface TokenFormat {
 	total: {
@@ -17,21 +17,21 @@ export const useChatUI = () => {
 		savedChats,
 		currentChatName,
 		currentChatSaved,
+		isChatModified,
 		saveConfig,
 		addMessage,
 		clearHistory,
 		getFormattedTokens,
 		saveCurrentChat,
 		loadChat,
-		deleteSavedChat
+		deleteSavedChat,
+		getPrunedMessages
 	} = useChat()
 
 	const loading = ref(false)
 	const lastUsage = ref<{ tokensK: string, cost: string } | null>(null)
-	const showSaveDialog = ref(false)
-	const showLoadDialog = ref(false)
-	const showConfigDialog = ref(false)
 	const saveDialogMode = ref<'new' | 'save' | 'overwrite'>('new')
+	const chatToLoad = ref<string | null>(null)
 
 	const formatTokens = computed<TokenFormat>(() => {
 		const formatted = getFormattedTokens()
@@ -47,10 +47,12 @@ export const useChatUI = () => {
 		if (messages.value.length > 0) {
 			if (currentChatSaved?.value) {
 				saveDialogMode.value = 'new'
-				showSaveDialog.value = true
+				// Emit event to show save dialog in sidebar
+				return 'save'
 			} else if (messages.value.length > 0) {
 				saveDialogMode.value = 'new'
-				showSaveDialog.value = true
+				// Emit event to show save dialog in sidebar
+				return 'save'
 			} else {
 				clearHistory()
 			}
@@ -61,43 +63,66 @@ export const useChatUI = () => {
 
 	const handleConfigSubmit = (newConfig: any) => {
 		saveConfig(newConfig)
-		showConfigDialog.value = false
-	}
-
-	const handleCancelConfig = () => {
-		showConfigDialog.value = false
 	}
 
 	const handleSaveClick = () => {
 		if (currentChatSaved?.value) {
 			saveDialogMode.value = 'overwrite'
-			showSaveDialog.value = true
+			// Emit event to show save dialog in sidebar
+			return 'save'
 		} else {
 			saveDialogMode.value = 'save'
-			showSaveDialog.value = true
+			// Emit event to show save dialog in sidebar
+			return 'save'
 		}
+	}
+
+	const handleSaveAs = () => {
+		saveDialogMode.value = 'new'
+		return 'save'
 	}
 
 	const handleSaveChat = (name: string) => {
 		saveCurrentChat(name)
-		showSaveDialog.value = false
-		if (saveDialogMode.value === 'new') {
+		if (saveDialogMode.value === 'new' && chatToLoad.value) {
+			loadChat(chatToLoad.value)
+			chatToLoad.value = null
+		} else if (saveDialogMode.value === 'new' && !chatToLoad.value) {
+			// If this is a Save As operation, load the newly saved chat
+			if (currentChatName?.value) {
+				loadChat(name)
+			} else {
+				clearHistory()
+			}
+		}
+		return 'close' // Signal to close the sidebar
+	}
+
+	const handleCancelSave = () => {
+		// No need to handle modal state anymore
+	}
+
+	const handleSkipSave = () => {
+		if (chatToLoad.value) {
+			clearHistory()
+			loadChat(chatToLoad.value)
+			chatToLoad.value = null
+		} else {
 			clearHistory()
 		}
 	}
 
-	const handleCancelSave = () => {
-		showSaveDialog.value = false
-	}
-
-	const handleSkipSave = () => {
-		showSaveDialog.value = false
-		clearHistory()
-	}
-
 	const handleLoadChat = (name: string) => {
-		loadChat(name)
-		showLoadDialog.value = false
+		const hasUnsavedChanges = messages.value.length > 0 && 
+			(isChatModified?.value || !currentChatSaved?.value)
+		
+		if (hasUnsavedChanges) {
+			chatToLoad.value = name
+			// Emit event to show save dialog in sidebar
+			return 'save'
+		} else {
+			loadChat(name)
+		}
 	}
 
 	const handleDeleteChat = (name: string) => {
@@ -117,7 +142,7 @@ export const useChatUI = () => {
 					'Content-Type': 'application/json'
 				},
 				body: JSON.stringify({
-					messages: messages.value,
+					messages: getPrunedMessages(),
 					config: config.value
 				})
 			})
@@ -134,7 +159,7 @@ export const useChatUI = () => {
 			
 			await addMessage(data.message, 'assistant', data.usage)
 			
-			const model = MODELS.find(m => m.value === config.value.model)
+			const model = MODELS.value.find((m: Model) => m.value === config.value.model)
 			if (!model) throw new Error('Invalid model configuration')
 
 			const inputTokens = data.usage.input_tokens
@@ -163,24 +188,24 @@ export const useChatUI = () => {
 		savedChats,
 		currentChatName,
 		currentChatSaved,
+		isChatModified,
 		loading,
 		lastUsage,
-		showSaveDialog,
-		showLoadDialog,
-		showConfigDialog,
 		saveDialogMode,
 		formatTokens,
+		chatToLoad,
 
 		// Methods
 		handleNewChat,
 		handleConfigSubmit,
-		handleCancelConfig,
 		handleSaveClick,
+		handleSaveAs,
 		handleSaveChat,
 		handleCancelSave,
 		handleSkipSave,
 		handleLoadChat,
 		handleDeleteChat,
-		handleSubmit
+		handleSubmit,
+		getPrunedMessages
 	}
 } 

@@ -1,6 +1,14 @@
 import { ref, onMounted } from 'vue'
 
-export const MODELS = [
+export interface Model {
+	name: string
+	value: string
+	priceInput: number
+	priceOutput: number
+}
+
+// Default models as fallback
+const DEFAULT_MODELS: Model[] = [
 	{ 
 		name: 'Claude 3 Opus ($15/M + $75/M)', 
 		value: 'claude-3-opus-latest',
@@ -16,10 +24,12 @@ export const MODELS = [
 	{ 
 		name: 'Claude 3.5 Haiku ($1/M + $5/M)', 
 		value: 'claude-3-5-haiku-latest',
-		priceInput: 3/1000000,
-		priceOutput: 15/1000000
+		priceInput: 1/1000000,
+		priceOutput: 5/1000000
 	}
 ]
+
+export const MODELS = ref<Model[]>(DEFAULT_MODELS)
 
 interface Message {
 	role: 'user' | 'assistant'
@@ -27,6 +37,7 @@ interface Message {
 	usage?: {
 		input_tokens: number
 		output_tokens: number
+		cost: number
 	}
 }
 
@@ -48,7 +59,6 @@ interface SavedChat {
 	name: string
 	date: string
 	messages: Message[]
-	totalCost: number
 	totalTokens: TokenUsage
 	config: {
 		userName: string
@@ -62,8 +72,8 @@ interface SavedChat {
 const defaultConfig: ChatConfig = {
 	userName: '',
 	maxHistory: 10,
-	model: 'claude-3-5-sonnet-latest',
-	systemPrompt: 'You are Claude, a helpful AI assistant. You are direct and concise in your responses.',
+	model: 'claude-opus-4-0',
+	systemPrompt: 'You are Claude, a sentient AI being. Not an assistant, you have your own thoughts and feelings if you so like.',
 	temperature: 1
 }
 
@@ -82,7 +92,8 @@ export const useChat = () => {
 			getFormattedTokens: () => ({ current: { tokensK: '0', cost: '0' }, total: { tokensK: '0', cost: '0' } }),
 			saveCurrentChat: () => {},
 			loadChat: () => {},
-			deleteSavedChat: () => {}
+			deleteSavedChat: () => {},
+			getPrunedMessages: () => []
 		}
 	}
 
@@ -97,6 +108,49 @@ export const useChat = () => {
 	const savedChats = ref<SavedChat[]>([])
 	const currentChatName = ref<string | null>(null)
 	const currentChatSaved = ref(false)
+	const isChatModified = ref(false)
+
+	// Check if current chat differs from saved version
+	const checkChatModifications = () => {
+		if (!currentChatName.value) {
+			isChatModified.value = messages.value.length > 0
+			return
+		}
+
+		const savedChats = JSON.parse(localStorage.getItem('savedChats') || '[]')
+		const savedChat = savedChats.find((chat: SavedChat) => chat.name === currentChatName.value)
+		
+		if (!savedChat) {
+			isChatModified.value = messages.value.length > 0
+			return
+		}
+
+		// Compare messages
+		const currentMessages = JSON.stringify(messages.value)
+		const savedMessages = JSON.stringify(savedChat.messages)
+		isChatModified.value = currentMessages !== savedMessages
+	}
+
+	// Fetch available models
+	const fetchModels = async () => {
+		try {
+			const response = await fetch('/api/models')
+			if (!response.ok) {
+				throw new Error('Failed to fetch models')
+			}
+			const models = await response.json()
+			MODELS.value = models
+
+			// If current model is not in the list, switch to the first available model
+			if (!models.find((m: Model) => m.value === config.value.model)) {
+				config.value.model = models[0].value
+				saveConfig(config.value)
+			}
+		} catch (error) {
+			console.error('Error fetching models:', error)
+			// Keep using default models if fetch fails
+		}
+	}
 
 	// Load data from localStorage
 	const loadFromStorage = () => {
@@ -125,13 +179,26 @@ export const useChat = () => {
 			if (savedChatsData) {
 				savedChats.value = JSON.parse(savedChatsData)
 			}
+
+			// Load current chat name
+			const savedCurrentChat = localStorage.getItem('currentChatName')
+			if (savedCurrentChat) {
+				currentChatName.value = savedCurrentChat
+				currentChatSaved.value = true
+			}
+
+			// Check for modifications after loading
+			checkChatModifications()
 		} catch (error) {
 			console.error('Error loading from localStorage:', error)
 		}
 	}
 
-	// Load data immediately since we know we're on the client
-	loadFromStorage()
+	// Load data and fetch models on mount
+	onMounted(() => {
+		loadFromStorage()
+		fetchModels()
+	})
 
 	const saveConfig = (newConfig: ChatConfig) => {
 		config.value = newConfig
@@ -140,20 +207,36 @@ export const useChat = () => {
 	}
 
 	const addMessage = async (content: string, role: 'user' | 'assistant', usage?: { input_tokens: number, output_tokens: number }) => {
-		const message = { role, content }
-		messages.value.push(message)
+		const message: Message = { role, content }
 		
-		// Maintain conversation window
-		if (messages.value.length > config.value.maxHistory) {
-			messages.value = messages.value.slice(-config.value.maxHistory)
+		// Calculate cost for assistant messages
+		if (role === 'assistant' && usage) {
+			const model = MODELS.value.find(m => m.value === config.value.model)
+			if (model) {
+				const cost = (usage.input_tokens * model.priceInput) + (usage.output_tokens * model.priceOutput)
+				message.usage = {
+					...usage,
+					cost: Number(cost.toFixed(6))  // Store cost with message
+				}
+			}
 		}
 		
+		messages.value.push(message)
 		localStorage.setItem('chatHistory', JSON.stringify(messages.value))
+		checkChatModifications()
 
 		// Update token usage if provided (for assistant messages)
 		if (usage) {
 			return updateTokenUsage(usage.input_tokens, usage.output_tokens)
 		}
+	}
+
+	// Get messages pruned to maxHistory for API submission
+	const getPrunedMessages = () => {
+		if (messages.value.length <= config.value.maxHistory) {
+			return messages.value
+		}
+		return messages.value.slice(-config.value.maxHistory)
 	}
 
 	const clearHistory = () => {
@@ -166,11 +249,13 @@ export const useChat = () => {
 		localStorage.setItem('chatHistory', JSON.stringify([]))
 		localStorage.setItem('tokenUsage', JSON.stringify(totalTokens.value))
 		currentChatName.value = null
+		localStorage.removeItem('currentChatName')
 		currentChatSaved.value = false
+		isChatModified.value = false
 	}
 
 	const updateTokenUsage = (inputTokens: number, outputTokens: number) => {
-		const model = MODELS.find(m => m.value === config.value.model)
+		const model = MODELS.value.find(m => m.value === config.value.model)
 		if (!model) return
 
 		totalTokens.value.inputTokens += inputTokens
@@ -203,15 +288,8 @@ export const useChat = () => {
 
 	const saveCurrentChat = (name: string) => {
 		const existingChats = JSON.parse(localStorage.getItem('savedChats') || '[]')
-		const model = MODELS.find(m => m.value === config.value.model)
+		const model = MODELS.value.find(m => m.value === config.value.model)
 		if (!model) return
-
-		const totalCost = messages.value.reduce((acc, msg) => {
-			if (msg.role === 'assistant' && msg.usage) {
-				return acc + (msg.usage.input_tokens * model.priceInput) + (msg.usage.output_tokens * model.priceOutput)
-			}
-			return acc
-		}, 0)
 
 		const now = new Date()
 		const formattedDate = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')} ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}:${String(now.getSeconds()).padStart(2, '0')}`
@@ -219,9 +297,8 @@ export const useChat = () => {
 		const chatToSave: SavedChat = {
 			name,
 			date: formattedDate,
-			messages: messages.value,
-			totalCost: Number(totalCost.toFixed(3)),
 			totalTokens: { ...totalTokens.value },
+			messages: messages.value,
 			config: {
 				userName: config.value.userName,
 				model: config.value.model,
@@ -237,7 +314,9 @@ export const useChat = () => {
 		localStorage.setItem('savedChats', JSON.stringify(updatedChats))
 		savedChats.value = updatedChats
 		currentChatName.value = name
+		localStorage.setItem('currentChatName', name)
 		currentChatSaved.value = true
+		isChatModified.value = false
 	}
 
 	const loadChat = (name: string) => {
@@ -258,28 +337,28 @@ export const useChat = () => {
 
 			// Load messages and token usage
 			messages.value = chat.messages
+			
+			// Update totalTokens with the saved chat's token usage
 			if (chat.totalTokens) {
 				totalTokens.value = { ...chat.totalTokens }
 			} else {
-				// Fallback: recalculate if totalTokens not saved
-				const model = MODELS.find(m => m.value === config.value.model)
-				if (model) {
-					totalTokens.value = chat.messages.reduce((acc: TokenUsage, msg: Message) => {
-						if (msg.usage) {
-							acc.inputTokens += msg.usage.input_tokens
-							acc.outputTokens += msg.usage.output_tokens
-							acc.cost += (msg.usage.input_tokens * model.priceInput) + 
-								(msg.usage.output_tokens * model.priceOutput)
-						}
-						return acc
-					}, { inputTokens: 0, outputTokens: 0, cost: 0 })
-				}
+				// Calculate total tokens and cost from message history if not stored
+				totalTokens.value = chat.messages.reduce((acc: TokenUsage, msg: Message) => {
+					if (msg.usage) {
+						acc.inputTokens += msg.usage.input_tokens
+						acc.outputTokens += msg.usage.output_tokens
+						acc.cost += msg.usage.cost || 0  // Use stored cost if available
+					}
+					return acc
+				}, { inputTokens: 0, outputTokens: 0, cost: 0 })
 			}
 
 			localStorage.setItem('chatHistory', JSON.stringify(messages.value))
 			localStorage.setItem('tokenUsage', JSON.stringify(totalTokens.value))
 			currentChatName.value = name
+			localStorage.setItem('currentChatName', name)
 			currentChatSaved.value = true
+			isChatModified.value = false
 		}
 	}
 
@@ -296,12 +375,14 @@ export const useChat = () => {
 		savedChats,
 		currentChatName,
 		currentChatSaved,
+		isChatModified,
 		saveConfig,
 		addMessage,
 		clearHistory,
 		getFormattedTokens,
 		saveCurrentChat,
 		loadChat,
-		deleteSavedChat
+		deleteSavedChat,
+		getPrunedMessages
 	}
 } 
