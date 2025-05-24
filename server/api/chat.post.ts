@@ -1,4 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
+import { toolProcessor } from '../../ai-tools/tools/processor'
+import { tools } from '../../ai-tools/config/tools'
 
 interface Message {
 	role: 'user' | 'assistant'
@@ -40,8 +42,33 @@ export default defineEventHandler(async (event) => {
 		})
 
 		if (response.content[0].type === 'text') {
+			let processedMessage = response.content[0].text
+
+			// Process tool tags in the API response
+			const toolTags = tools.map(tool => {
+				const regex = new RegExp(`<${tool.tagName}>(.*?)</${tool.tagName}>`, 'gs')
+				const matches = [...processedMessage.matchAll(regex)]
+				return matches.map(match => ({
+					toolId: tool.id,
+					content: match[1].trim()
+				}))
+			}).flat()
+
+			// Process each tool tag
+			for (const tag of toolTags) {
+				const response = await toolProcessor.processToolMessage(tag.toolId, tag.content, config)
+				// Replace the tool tag with the response in the message
+				const tool = tools.find(t => t.id === tag.toolId)
+				if (tool) {
+					processedMessage = processedMessage.replace(
+						`<${tool.tagName}>${tag.content}</${tool.tagName}>`,
+						`<${tool.responseTagName}>${response.content}</${tool.responseTagName}>`
+					)
+				}
+			}
+
 			return {
-				message: response.content[0].text,
+				message: processedMessage,
 				usage: response.usage
 			}
 		}

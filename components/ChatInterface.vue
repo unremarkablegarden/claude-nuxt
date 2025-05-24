@@ -42,7 +42,7 @@
 
 			<div v-if="lastUsage" class="usage-info">
 				<div class="usage-stats">
-					<span>Last message: {{ lastUsage.tokensK }}k tokens (${{ lastUsage.cost }})</span>
+					<span>Last message: {{ lastUsage.tokensK }}k tokens (${{ lastUsage.cost }}) · {{ messages.length }} messages</span>
 					<span class="usage-model">{{ currentModel }} · t={{ config.temperature }}</span>
 				</div>
 			</div>
@@ -113,10 +113,10 @@ const scrollToBottom = async (force = false) => {
 		
 		if (force || isScrolledToBottom) {
 			// First snap to top
-			container.scrollTo({
-				top: 0,
-				behavior: 'auto'
-			})
+			// container.scrollTo({
+			// 	top: 0,
+			// 	behavior: 'auto'
+			// })
 			
 			// Then scroll to bottom with animation
 			container.scrollTo({

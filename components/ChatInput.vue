@@ -46,7 +46,8 @@ const handleKeyDown = (event: KeyboardEvent) => {
 	gap: 0.5rem;
 	padding: 1rem;
 	background: black;
-	height: 100%;
+	/* height: 100%; */
+	height: calc(100% - 2.5rem)
 }
 
 .message-input {

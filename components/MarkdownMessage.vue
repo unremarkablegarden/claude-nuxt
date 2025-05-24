@@ -1,5 +1,6 @@
 <template>
 	<div class="markdown-content" v-html="renderedContent"></div>
+	<!-- <pre style="color: white;">{{ content }}</pre> -->
 </template>
 
 <script setup lang="ts">
@@ -10,8 +11,29 @@ const props = defineProps<{
 	content: string
 }>()
 
+const escapeHtmlTags = (text: string) => {
+	// If the message contains typing-dots class, don't escape HTML
+	if (text.includes("class='typing-dots'")) {
+		return text
+	}
+
+	// First, temporarily replace code blocks with placeholders
+	const codeBlocks: string[] = []
+	const textWithPlaceholders = text.replace(/```[\s\S]*?```/g, (match) => {
+		codeBlocks.push(match)
+		return `__CODE_BLOCK_${codeBlocks.length - 1}__`
+	})
+
+	// Escape HTML tags in the non-code content
+	const escapedContent = textWithPlaceholders.replace(/<([^>]+)>/g, '<code>&lt;$1&gt;</code>')
+
+	// Restore code blocks
+	return escapedContent.replace(/__CODE_BLOCK_(\d+)__/g, (_, index) => codeBlocks[parseInt(index)])
+}
+
 const renderedContent = computed(() => {
-	return marked(props.content, {
+	const escapedContent = escapeHtmlTags(props.content)
+	return marked(escapedContent, {
 		gfm: true, // GitHub Flavored Markdown
 		breaks: true // Convert line breaks to <br>
 	})
